@@ -83,7 +83,7 @@ def run_ingestion():
             batch = []
             batch_size = 10 
             
-            for line in islice(f, 1000):
+            for line in f:
                 if not line.strip(): continue
                 try:
                     data = json.loads(line)

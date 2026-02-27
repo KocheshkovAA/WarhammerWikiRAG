@@ -57,6 +57,8 @@ services:
     image: redis:7-alpine
     ports:
       - "${REDIS_PORT}:6379"
+    environment:
+      - REDIS_CLUSTER_ENABLED=false
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -82,9 +84,10 @@ services:
     image: clickhouse/clickhouse-server:latest
     profiles: ["debug"]
     environment:
-      CLICKHOUSE_USER: ${CH_USER}
-      CLICKHOUSE_PASSWORD: ${CH_PASSWORD}
-      CLICKHOUSE_DB: ${CH_DB}
+    - CLICKHOUSE_USER=${CH_USER}
+    - CLICKHOUSE_PASSWORD=${CH_PASSWORD}
+    - CLICKHOUSE_DB=${CH_DB}
+    - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     volumes:
       - clickhouse_data:/var/lib/clickhouse
     healthcheck:
@@ -93,48 +96,85 @@ services:
       timeout: 5s
       retries: 5
 
+  minio:
+    image: minio/minio:latest
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - ./data/minio_data:/data
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    command: server /data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   langfuse:
-    image: langfuse/langfuse:3
+      image: langfuse/langfuse:3
+      profiles: ["debug"]
+      depends_on:
+        langfuse-db: { condition: service_healthy }
+        clickhouse: { condition: service_healthy }
+        redis: { condition: service_healthy }
+        minio: { condition: service_healthy }
+      ports:
+        - "${LANGFUSE_PORT}:3000"
+      environment:
+        - NODE_ENV=production
+        - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@langfuse-db:5432/${POSTGRES_DB}
+        - CLICKHOUSE_URL=http://clickhouse:8123/${CH_DB}
+        # Исправлено: используем переменные для миграций
+        - CLICKHOUSE_MIGRATION_URL=clickhouse://${CH_USER}:${CH_PASSWORD}@clickhouse:9000/${CH_DB}
+        - CLICKHOUSE_USER=${CH_USER}
+        - CLICKHOUSE_PASSWORD=${CH_PASSWORD}
+        - CLICKHOUSE_DB=${CH_DB}
+        - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+        - NEXTAUTH_URL=${NEXTAUTH_URL}
+        - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+        - SALT=${SALT}
+        - REDIS_CONNECTION_STRING=redis://redis:6379/0
+        - LANGFUSE_INGESTION_QUEUE_TYPE=redis
+        - LANGFUSE_OTEL_INGESTION_QUEUE_TYPE=redis
+        - LANGFUSE_ENABLE_WORKER_IN_WEB_CONTAINER=false
+        # S3 / Minio
+        - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=${LANGFUSE_S3_EVENT_UPLOAD_BUCKET}
+        - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID}
+        - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY}
+        - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+        - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+        - AWS_REGION=${LANGFUSE_S3_EVENT_UPLOAD_REGION:-us-east-1}
+
+  langfuse-worker:
+    image: langfuse/langfuse-worker:3
     profiles: ["debug"]
     depends_on:
-      langfuse-db:
-        condition: service_healthy
-      clickhouse:
-        condition: service_healthy
-    ports:
-      - "${LANGFUSE_PORT}:3000"
+      langfuse: { condition: service_started }
+      redis: { condition: service_healthy }
     environment:
       - NODE_ENV=production
-      - HOSTNAME=0.0.0.0
       - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@langfuse-db:5432/${POSTGRES_DB}
-      
-      # ClickHouse
       - CLICKHOUSE_URL=http://clickhouse:8123/${CH_DB}
-      - CLICKHOUSE_MIGRATION_URL=clickhouse://${CH_USER}:${CH_PASSWORD}@clickhouse:9000/${CH_DB}
       - CLICKHOUSE_USER=${CH_USER}
       - CLICKHOUSE_PASSWORD=${CH_PASSWORD}
       - CLICKHOUSE_DB=${CH_DB}
-      - CLICKHOUSE_CLUSTER_ENABLED=false
-
-      # Auth & Security (Убедитесь, что в .env нет пробелов!)
-      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
-      - NEXTAUTH_URL=${NEXTAUTH_URL}
+      - REDIS_CONNECTION_STRING=redis://redis:6379/0
+      - LANGFUSE_INGESTION_QUEUE_TYPE=redis
+      - LANGFUSE_OTEL_INGESTION_QUEUE_TYPE=redis
+      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=${LANGFUSE_S3_EVENT_UPLOAD_BUCKET}
+      - LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID=${LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID}
+      - LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY=${LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY}
+      - LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT=http://minio:9000
+      - LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE=true
+      - AWS_REGION=${LANGFUSE_S3_EVENT_UPLOAD_REGION:-us-east-1}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY}
       - SALT=${SALT}
-      - TELEMETRY_ENABLED=false
+      - NEXTAUTH_SECRET=${NEXTAUTH_SECRET}
+      - NEXTAUTH_URL=${NEXTAUTH_URL} # Добавлено для консистентности
 
-      # ФИКС БАГА #8996 (Добавляем эти три строки обязательно)
-      # --- ВМЕСТО СТАРЫХ НАСТРОЕК S3 ---
-      # Отключаем попытки загрузки в облако
-      - LANGFUSE_S3_EVENT_UPLOAD_BUCKET=
-      
-      # Включаем прямую запись в БД (самый стабильный вариант для локалхоста)
-      - LANGFUSE_DIRECT_DB_CONNECTION=true
-      
-      # Если ты используешь Langfuse v3, ему всё равно может быть нужен 
-      # "фейковый" драйвер, чтобы не ругаться на отсутствие AWS SDK. 
-      # Попробуй сначала просто убрать бакет.
-      # Ваше приложение
   api:
     build: .
     ports:
