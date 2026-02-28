@@ -2,7 +2,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 
 class Settings(BaseSettings):
-    PROJECT_NAME: str = "Warhammer RAG API"
+    PROJECT_NAME: str = "RAG API"
     
     # --- Внутренние URL для Docker-сети ---
     # API обращается к сервисам по их именам в docker-compose
