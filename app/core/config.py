@@ -19,8 +19,9 @@ class Settings(BaseSettings):
     LANGFUSE_PUBLIC_KEY: str = Field(default="")
     LANGFUSE_SECRET_KEY: str = Field(default="")
     LANGFUSE_HOST: str = Field(default="http://langfuse:3000")
-
     LLM_PROVIDER: str = "gigachat"  # или "openrouter"
+
+    DATASET_PATH: str = "data/eval/warhammer40k_eval_60q.jsonl"
     
     # --- GigaChat ---
     GIGACHAT_CREDENTIALS: str = Field(default="")

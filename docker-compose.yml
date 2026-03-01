@@ -1,6 +1,6 @@
 services:
+  # GPU
   tei:
-      # GPU
       image: ghcr.io/huggingface/text-embeddings-inference:latest
       command: >
         --model-id Qwen/Qwen3-Embedding-0.6B
@@ -24,11 +24,12 @@ services:
         timeout: 10s
         retries: 10
 
+  # CPU
   # tei:
-  #   СPU
   #   image: ghcr.io/huggingface/text-embeddings-inference:cpu-latest
   #   command: >
   #     --model-id onnx-community/Qwen3-Embedding-0.6B-ONNX
+  #     --pooling last-token
   #     --auto-truncate 
   #     --max-batch-tokens 2048
   #   ports:
@@ -38,6 +39,30 @@ services:
   #   healthcheck:
   #     test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
   #     interval: 15s
+  #     retries: 10
+
+  # tei-reranker:
+  #   image: ghcr.io/huggingface/text-embeddings-inference:latest
+  #   command: >
+  #     --model-id BAAI/bge-reranker-v2-m3
+  #     --auto-truncate 
+  #     --max-batch-tokens 8192
+  #     --max-concurrent-requests 16
+  #   ports:
+  #     - "8081:80"  # Вешаем на другой порт
+  #   volumes:
+  #     - ./data/tei_reranker_data:/data
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
+  #     interval: 15s
+  #     timeout: 10s
   #     retries: 10
 
   qdrant:
