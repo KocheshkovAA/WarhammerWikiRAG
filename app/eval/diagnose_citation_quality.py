@@ -10,7 +10,7 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 sys.path.insert(0, project_root)
 
 from app.core.config import settings
-from app.core.vectorstore import vector_store
+from app.core.retriever import vector_store
 
 async def check_citations_in_qdrant():
     print("═" * 80)

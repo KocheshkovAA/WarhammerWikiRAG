@@ -10,6 +10,16 @@ class Settings(BaseSettings):
     TEI_URL: str = Field(default="http://tei:80")
     REDIS_URL: str = Field(default="redis://redis:6379/0")
     
+    # --- RERANKER ---
+    RERANKER_ENABLED: bool = Field(default=True)
+    RERANKER_TOP_K: int = 5
+    # В docker-compose сервис называется vllm-reranker, порт внутри 8000
+    RERANKER_URL: str = Field(default="http://vllm-reranker:8000")
+    RERANKER_MODEL: str = Field(default="bge-reranker-v2-m3")
+    RERANKER_BATCH_SIZE: int = 2 # vLLM хорошо держит батчи побольше
+
+    QUERY_OPTIMIZER_ENABLED: bool = False
+    
     # --- Данные и Коллекции ---
     COLLECTION_NAME: str = "warhammer_wiki"
     DATA_PATH: str = "data/processed/processed_chunks.jsonl"
@@ -35,5 +45,7 @@ class Settings(BaseSettings):
         env_file_encoding="utf-8", 
         extra="ignore" # Игнорируем лишние переменные (типа паролей БД), которые не нужны в Python
     )
+
+    QDRANT_COLLECTION: str = "warhammer_wiki"
 
 settings = Settings()

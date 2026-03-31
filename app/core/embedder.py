@@ -1,83 +1,79 @@
+# app/embeddings.py
+from typing import List
+from langchain_core.embeddings import Embeddings
+from tenacity.retry import retry_if_exception_type, retry_if_result
 from fastembed import SparseTextEmbedding
 from qdrant_client.models import SparseVector
 import httpx
-import time
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
-from app.core.config import settings
+from tenacity import retry, stop_after_attempt, wait_exponential
 from langfuse import observe, get_client
+from app.core.config import settings
 
-class HybridEmbedder:
+
+class TEIEmbeddings(Embeddings):
+    """Dense embeddings через TEI inference сервер (async-first)"""
+
     def __init__(self):
-        self.sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
-        self.tei_url = f"{settings.TEI_URL}/embed"
-        self.query_instruction = "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+        self.url = f"{settings.TEI_URL}/embed".rstrip("/")
+        self.query_prefix = (
+            "Instruct: Given a web search query, retrieve relevant passages "
+            "that answer the query\nQuery: "
+        )
+        self.client = httpx.AsyncClient(timeout=120.0, limits=httpx.Limits(max_connections=100))
 
-    @observe(name="Embedder: Sparse")
-    def get_sparse_embeddings(self, texts: list[str]) -> list[SparseVector]:
+    @observe(name="TEI embed_documents", capture_output=False)
+    def embed_documents(self, texts: List[str]) -> List[List[float]]:
+        return self._sync_embed(texts, is_query=False)
+
+    @observe(name="TEI embed_query", capture_output=False)
+    def embed_query(self, text: str) -> List[float]:
+        return self.embed_documents([f"{self.query_prefix}{text}"])[0]
+
+    def _sync_embed(self, texts: List[str], is_query: bool) -> List[List[float]]:
+        processed = texts if not is_query else [f"{self.query_prefix}{t}" for t in texts]
+        resp = httpx.post(f"{self.url}", json={"inputs": processed}, timeout=120.0)
+        resp.raise_for_status()
+        return resp.json()
+
+    @observe(name="TEI aembed_documents", capture_output=False)
+    @retry(
+        stop=stop_after_attempt(6),
+        wait=wait_exponential(multiplier=1, min=2, max=30),
+        retry=retry_if_exception_type(httpx.HTTPStatusError),
+        reraise=True,
+    )
+    async def aembed_documents(self, texts: List[str]) -> List[List[float]]:
         lf = get_client()
-        lf.update_current_trace(input={"num_texts": len(texts)})
-        embeddings = list(self.sparse_model.embed(texts))
+        lf.update_current_trace(input={"count": len(texts), "type": "documents"})
+
+        processed = texts 
+        resp = await self.client.post(f"{self.url}", json={"inputs": processed})
+
+        resp.raise_for_status()
+        return resp.json()
+
+    async def aembed_query(self, text: str) -> List[float]:
+        return (await self.aembed_documents([f"{self.query_prefix}{text}"]))[0]
+
+
+class BM25SparseEmbeddings:
+    """Sparse BM25-подобные embeddings (fastembed)"""
+
+    def __init__(self):
+        self.model = SparseTextEmbedding(model_name="Qdrant/bm25")
+
+    @observe(name="BM25 embed_documents", capture_output=False)
+    def embed_documents(self, texts: List[str]) -> List[SparseVector]:
+        embeddings = list(self.model.embed(texts))
         return [
             SparseVector(
-                indices=e.indices.tolist(), 
+                indices=e.indices.tolist(),
                 values=e.values.tolist()
-            ) for e in embeddings
+            )
+            for e in embeddings
         ]
 
-    @observe(name="Embedder: Dense (Async)")
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=4, max=20),
-        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ReadTimeout, httpx.ConnectError))
-    )
-    async def get_dense_embeddings(self, texts: list[str], is_query: bool = True) -> list[list[float]]:
-        lf = get_client()
-        lf.update_current_trace(
-            input={"num_texts": len(texts), "is_query": is_query},
-            metadata={"model_url": self.tei_url}
-        )
+    def embed_query(self, text: str) -> SparseVector:
+        return self.embed_documents([text])[0]
+    
 
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            processed_texts = [
-                f"{self.query_instruction}{t}" if is_query else t 
-                for t in texts
-            ]
-
-            response = await client.post(self.tei_url, json={"inputs": processed_texts})
-            
-            if response.status_code == 429:
-                raise httpx.HTTPStatusError("Rate limit", request=response.request, response=response)
-                
-            response.raise_for_status()
-            return response.json()
-
-    @observe(name="Embedder: Dense (Sync)")
-    @retry(
-        stop=stop_after_attempt(5),
-        wait=wait_exponential(multiplier=1, min=4, max=20),
-        retry=retry_if_exception_type((httpx.HTTPStatusError, httpx.ReadTimeout, httpx.ConnectError))
-    )
-    def get_dense_embeddings_sync(self, texts: list[str], is_query: bool = True) -> list[list[float]]:
-        lf = get_client()
-        lf.update_current_trace(
-            input={"num_texts": len(texts), "is_query": is_query},
-            metadata={"model_url": self.tei_url}
-        )
-        
-        with httpx.Client(timeout=300.0) as client:
-            processed_texts = [
-                f"{self.query_instruction}{t}" if is_query else t 
-                for t in texts
-            ]
-
-            response = client.post(self.tei_url, json={"inputs": processed_texts})
-            
-            if response.status_code == 429:
-                print("⏳ TEI Rate Limit (429). Ждем...")
-                time.sleep(5)
-                raise httpx.HTTPStatusError("Rate limit", request=response.request, response=response)
-                
-            response.raise_for_status()
-            return response.json()
-
-embedder = HybridEmbedder()

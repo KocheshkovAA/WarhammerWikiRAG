@@ -6,7 +6,6 @@ from app.core.config import settings
 
 class LLMFactory:
     """Фабрика для создания инстансов LLM"""
-    
     @staticmethod
     def get_llm(temperature: float = 0.12) -> BaseChatModel:
         if settings.LLM_PROVIDER == "gigachat":
@@ -23,9 +22,7 @@ class LLMFactory:
                 openai_api_base="https://openrouter.ai/api/v1",
                 temperature=temperature,
             )
-        
-        # Если захочешь вернуть Ollama, просто добавишь ветку сюда
+
         raise ValueError(f"Unknown LLM provider: {settings.LLM_PROVIDER}")
 
-# Создаем объект для использования
 llm_factory = LLMFactory()
