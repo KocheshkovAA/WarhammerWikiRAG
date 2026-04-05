@@ -1,0 +1,102 @@
+import json
+import asyncio
+import os
+import sys
+import pandas as pd
+from pathlib import Path
+from typing import Any, Optional, List
+
+# Добавляем корень проекта в sys.path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+sys.path.insert(0, project_root)
+
+from app.core.llm import llm_factory
+from langfuse import observe
+from pydantic import BaseModel, Field
+
+class JudgeScore(BaseModel):
+    """Схема оценки ответа экспертом"""
+    context_relevance: float = Field(description="Полезность контекста (0-1)")
+    faithfulness: float = Field(description="Отсутствие галлюцинаций (0-1)")
+    answer_relevance: float = Field(description="Полнота ответа на вопрос (0-1)")
+    critique: str = Field(description="Обоснование на русском языке")
+
+class WarJudge:
+    def __init__(self):
+        self.llm = llm_factory.get_llm(temperature=0.0, model_name="GigaChat-Pro")
+        self.structured_llm = self.llm.with_structured_output(JudgeScore)
+
+    @observe(name="Judge: Evaluate Response")
+    async def evaluate_single_row(self, row: dict) -> Optional[JudgeScore]:
+        system_prompt = (
+            "Ты — эксперт-валидатор данных по вселенной Warhammer 40,000. "
+            "Проведи строгий аудит ответа на основе предоставленного контекста."
+        )
+        
+        context_text = "\n---\n".join(row.get("contexts", [])[:3])
+        
+        user_content = f"ВОПРОС: {row['question']}\nКОНТЕКСТ: {context_text}\nОТВЕТ: {row['answer']}"
+
+        try:
+            score: JudgeScore = await self.structured_llm.ainvoke([
+                ("system", system_prompt), 
+                ("user", user_content)
+            ])
+
+            return score
+        except Exception as e:
+            print(f"❌ Error evaluating {row.get('id')}: {e}")
+            return None
+
+async def run_mega_eval():
+    input_path = Path("app/eval/results/eval_full_data.jsonl")
+    output_path = Path("app/eval/results/judge_results.csv")
+    
+    if not input_path.exists():
+        print(f"❌ Файл {input_path} не найден!")
+        return
+
+    with open(input_path, "r", encoding="utf-8") as f:
+        data = [json.loads(line) for line in f]
+
+    judge = WarJudge()
+    evaluated_data = []
+
+    print(f"🚀 Начало оценки | Объектов: {len(data)}")
+    print("═" * 80)
+    print(f"{'ID':<10} | {'Faith':<6} | {'Relv':<6} | {'Ctx':<6} | {'Critique'}")
+    print("─" * 80)
+
+    for row in data:
+        score = await judge.evaluate_single_row(row)
+        if score:
+            # Печать в консоль всех метрик
+            print(f"{str(row.get('id')):<10} | {score.faithfulness:<6.2f} | "
+                  f"{score.answer_relevance:<6.2f} | {score.context_relevance:<6.2f} | "
+                  f"{score.critique[:50]}...")
+            
+            # Собираем данные для сохранения
+            result_row = {
+                **row,
+                "judge_faithfulness": score.faithfulness,
+                "judge_answer_relevance": score.answer_relevance,
+                "judge_context_relevance": score.context_relevance,
+                "judge_critique": score.critique
+            }
+            evaluated_data.append(result_row)
+
+    # Сохранение результатов
+    if evaluated_data:
+        df = pd.DataFrame(evaluated_data)
+        df.to_csv(output_path, index=False)
+        
+        # Финальная статистика
+        print("═" * 80)
+        print(f"📊 СРЕДНИЕ ПОКАЗАТЕЛИ:")
+        print(f"Faithfulness: {df['judge_faithfulness'].mean():.2f}")
+        print(f"Relevance:    {df['judge_answer_relevance'].mean():.2f}")
+        print(f"Context:      {df['judge_context_relevance'].mean():.2f}")
+        print(f"\n✅ Результаты сохранены в: {output_path}")
+
+if __name__ == "__main__":
+    asyncio.run(run_mega_eval())

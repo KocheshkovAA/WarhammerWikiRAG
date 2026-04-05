@@ -16,17 +16,21 @@ from app.chains.base import rag_chain
 from app.core.reranker import reranker
 
 K_VALUES = [3, 5, 10, 20]
+from datetime import datetime
+
+# Путь для дампа (создай папку results в app/eval)
+RESULTS_PATH = Path(project_root) / "app/eval/results/eval_full_data.jsonl"
 langfuse_client = get_client()
 
 def normalize_text(text: str) -> str:
     return text.lower().strip() if text else ""
 
-@observe(name="Retrieval Evaluation Single Case")
-async def evaluate_one(question_data, use_rerank: bool):
+@observe(name="Retrieval + Generation Collector")
+async def evaluate_one(question_data, use_rerank: bool, collect_answers: bool = False):
     q_id = question_data.get("id", "??")
     question = question_data["question"]
 
-    # Подготовка эталонов
+    # ── Подготовка эталонов ──
     expected_titles = question_data.get("article_title", [])
     if isinstance(expected_titles, str): expected_titles = [expected_titles]
     
@@ -36,11 +40,11 @@ async def evaluate_one(question_data, use_rerank: bool):
 
     # Настройки
     reranker.enabled = use_rerank
-    settings.QUERY_OPTIMIZER_ENABLED = False # Отключаем для чистоты сравнения Base/Rerank
+    settings.QUERY_OPTIMIZER_ENABLED = False 
 
     try:
         handler = CallbackHandler()
-        # Вызов общего метода поиска из твоего RAG класса
+        # 1. Получаем документы через твой RAG класс
         final_docs = await rag_chain.get_relevant_documents(question, handler=handler)
 
         if not final_docs:
@@ -51,19 +55,13 @@ async def evaluate_one(question_data, use_rerank: bool):
 
         metrics = {}
         
-        # ── Метрики по заголовкам ──
+        # 2. ── Метрики по заголовкам (для всех K) ──
         for k in K_VALUES:
             top_k_titles = retrieved_titles[:k]
-            
-            # Hit
             hit = any(any(normalize_text(t) == normalize_text(et) for et in expected_titles) 
                       for t in top_k_titles if t != "UNKNOWN")
-            
-            # Recall & Precision
             found_count = sum(1 for t in top_k_titles if t != "UNKNOWN" and 
                               any(normalize_text(t) == normalize_text(et) for et in expected_titles))
-            
-            # MRR
             mrr = next((1.0 / (i + 1) for i, t in enumerate(top_k_titles) if t != "UNKNOWN" and 
                         any(normalize_text(t) == normalize_text(et) for et in expected_titles)), 0.0)
 
@@ -72,13 +70,12 @@ async def evaluate_one(question_data, use_rerank: bool):
             metrics[f"title_precision@{k}"] = found_count / k
             metrics[f"title_mrr@{k}"] = mrr
 
-        # ── Метрики по цитатам ──
+        # 3. ── Метрики по цитатам (для всех K) ──
         norm_expected_quotes = [normalize_text(q) for q in expected_quotes]
         norm_retrieved_contents = [normalize_text(c) for c in retrieved_contents]
 
         for k in K_VALUES:
             top_k_contents = norm_retrieved_contents[:k]
-            
             if norm_expected_quotes:
                 found_quotes = set()
                 for eq in norm_expected_quotes:
@@ -98,6 +95,31 @@ async def evaluate_one(question_data, use_rerank: bool):
             else:
                 metrics.update({f"citation_recall@{k}": 0.0, f"citation_hit@{k}": 0, 
                                 f"citation_precision@{k}": 0.0, f"citation_mrr@{k}": 0.0})
+
+        # 4. ── Генерация ответа и сохранение дампа для RAGAS ──
+        if collect_answers:
+            # Важно: вызываем саму генерацию ответа
+            answer_text = await rag_chain.chain.ainvoke(
+                {"docs": final_docs, "question": question},
+                config={"callbacks": [handler]} # Используем тот же хендлер для Langfuse
+            )
+            
+            dump_entry = {
+                "id": q_id,
+                "question": question,
+                "answer": answer_text,
+                "contexts": retrieved_contents,  # Сохраняем все чанки (переменная K для RAGAS)
+                "retrieval_metrics": metrics,     # Все твои расчеты Hit/Recall/MRR
+                "expected_titles": expected_titles,
+                "retrieved_titles": retrieved_titles,
+                "rerank_enabled": use_rerank,
+                "timestamp": datetime.now().isoformat()
+            }
+
+            # Пишем в JSONL (папка results должна существовать)
+            RESULTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+            with open(RESULTS_PATH, "a", encoding="utf-8") as f:
+                f.write(json.dumps(dump_entry, ensure_ascii=False) + "\n")
         
         return metrics
 
@@ -105,23 +127,31 @@ async def evaluate_one(question_data, use_rerank: bool):
         print(f"q{q_id} | Ошибка: {e}")
         return {"error": str(e)}
 
-async def run_evaluation(use_rerank: bool):
+async def run_evaluation(use_rerank: bool, collect_answers: bool = False):
     dataset_path = Path(settings.DATASET_PATH)
     with open(dataset_path, encoding="utf-8") as f:
         questions = [json.loads(line) for line in f if line.strip()]
 
     print(f"\n🚀 Оценка | Rerank = {use_rerank} | Вопросов: {len(questions)}")
 
-    results = await tqdm_asyncio.gather(
-        *[evaluate_one(q, use_rerank) for q in questions],
-        desc=f"Rerank={use_rerank}"
-    )
+    results = []
+    
+    for q in tqdm_asyncio(questions, desc=f"Rerank={use_rerank}"):
+        res = await evaluate_one(q, use_rerank, collect_answers)
+        results.append(res)
+        
+        if collect_answers:
+            await asyncio.sleep(0.1) 
 
     valid = [r for r in results if r and "error" not in r]
-    if not valid: return {}
+    if not valid: 
+        print("❌ Ошибка: Не получено ни одного валидного результата.")
+        return {}
 
     n = len(valid)
-    return {key: sum(r.get(key, 0.0) for r in valid) / n for key in valid[0].keys()}
+    # Собираем среднее по всем метрикам
+    aggregated = {key: sum(r.get(key, 0.0) for r in valid) / n for key in valid[0].keys()}
+    return aggregated
 
 def print_table(agg, use_rerank: bool):
     mode = "WITH RERANKER" if use_rerank else "WITHOUT RERANKER"
@@ -140,12 +170,15 @@ def print_table(agg, use_rerank: bool):
         print(row)
 
 async def main():
+    if RESULTS_PATH.exists():
+        RESULTS_PATH.unlink()
+        print(f"♻️ Старый файл {RESULTS_PATH.name} удален.")
     # 1. Без реранкера
     agg_no = await run_evaluation(use_rerank=False)
     print_table(agg_no, False)
 
     # 2. С реранкером
-    agg_yes = await run_evaluation(use_rerank=True)
+    agg_yes = await run_evaluation(use_rerank=True, collect_answers=True)
     print_table(agg_yes, True)
 
     # 3. Сравнение

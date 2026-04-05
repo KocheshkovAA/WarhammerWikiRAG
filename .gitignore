@@ -15,3 +15,6 @@ data/*
 !data/eval/
 data/eval/*
 !data/eval/warhammer40k_eval_60q.jsonl
+
+app/eval/results/*
+experiments/judge_results.csv

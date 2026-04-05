@@ -12,6 +12,9 @@ langchain-qdrant       # Специализированный пакет для 
 langchain-openai       # Или langchain-gigachat, если используешь его
 langchain_gigachat
 
+# Eval
+ragas
+
 # Vector DB & Search
 qdrant-client
 fastembed

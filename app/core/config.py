@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     
     # --- GigaChat ---
     GIGACHAT_CREDENTIALS: str = Field(default="")
+    GIGACHAT_MODEL_NAME: str = Field(default="Gigachat")
     
     # --- OpenRouter (если нужно) ---
     OPENROUTER_API_KEY: str = Field(default="")

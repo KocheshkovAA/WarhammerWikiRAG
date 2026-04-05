@@ -39,14 +39,6 @@ class Reranker:
             
             final_docs = [doc for score, doc in scored_docs[:self.top_k]]
 
-            # Логируем метаданные в текущий trace Langfuse
-            get_client().update_current_trace(
-                metadata={
-                    "rerank_input_count": len(docs),
-                    "rerank_output_count": len(final_docs),
-                    "rerank_max_score": max(scores) if scores else 0,
-                }
-            )
             return final_docs
 
         except Exception as e:
