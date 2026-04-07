@@ -1,4 +1,35 @@
 services:
+  lightrag:
+    image: ghcr.io/hkuds/lightrag:latest
+    ports:
+      - "${LIGHTRAG_PORT:-9621}:9621"
+    volumes:
+      - ./data/lightrag:/app/data/rag_storage
+      - ./data/lightrag_inputs:/app/data/inputs   
+    env_file: .env
+    depends_on:
+      tei:
+        condition: service_healthy
+      vllm-reranker:
+        condition: service_started
+      qdrant:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9621/health"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+
+  gigachat-adapter:
+    image: antonk0/gigachat-adapter:latest
+    environment:
+      GIGACHAT_CREDENTIALS: ${GIGACHAT_CREDENTIALS}
+      BEARER_TOKEN: MDNmNmY3ZDQtOWY4Mi00OGZmLTgzMWQtMWQ3NDJlYzhhMGEzOmMxMmIyY2M0LTFlM2MtNGFlNy1iNzg0LWM0YWZlNWRlZmYyYQ==
+      GIGACHAT_VERIFY_SSL_CERTS: "False"
+      timeout: 360
+    ports:
+      - "8081:8000"
   # GPU
   tei:
       image: ghcr.io/huggingface/text-embeddings-inference:latest
@@ -75,31 +106,6 @@ services:
         timeout: 10s
         retries: 5
       restart: unless-stopped
-
-  # jina-reranker:
-  #     image: ghcr.io/huggingface/text-embeddings-inference:latest
-  #     command: >
-  #       --model-id jinaai/jina-reranker-v2-base-multilingual
-  #       --auto-truncate 
-  #       --max-batch-tokens 2048
-  #       --max-concurrent-requests 4
-  #     # Для Jina v3 (2026) используйте jinaai/jina-reranker-v3-tiny или v3-base
-  #     ports:
-  #       - "8001:80"
-  #     volumes:
-  #       - ./data/jina_data:/data
-  #     deploy:
-  #       resources:
-  #         reservations:
-  #           devices:
-  #             - driver: nvidia
-  #               count: 1
-  #               capabilities: [gpu]
-  #     healthcheck:
-  #       test: ["CMD-SHELL", "curl -f http://localhost:80/health || exit 1"]
-  #       interval: 15s
-  #       timeout: 10s
-  #       retries: 10
 
   qdrant:
     image: qdrant/qdrant:latest

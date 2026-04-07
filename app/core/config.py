@@ -49,4 +49,7 @@ class Settings(BaseSettings):
 
     QDRANT_COLLECTION: str = "warhammer_wiki"
 
+    # --- lightrag ---
+    LIGHTRAG_BASE_URL: str = "http://lightrag:9621"
+
 settings = Settings()
