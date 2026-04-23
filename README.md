@@ -5,7 +5,7 @@
 - **Embeddings**: TEI (Text Embeddings Inference) — Qwen3-Embedding-0.6B
 - **Reranker**: bge-reranker-v2-m3
 - **LLM**: GigaChat Pro / GigaChat Lite (через API Sber)
-- **API**: FastAPI (асинхронный, готов к высоким нагрузкам)
+- **API**: FastAPI
 - **Инфраструктура**:
   - Всё в Docker + Docker Compose
   - Tracing & Observability — **Langfuse**
@@ -17,6 +17,9 @@
 
 ## Сервисы
 <img width="363" height="348" alt="RAG-Page-3 drawio" src="https://github.com/user-attachments/assets/1d7607d0-90d8-41e1-995a-d24dc6141dbe" />
+
+## LightRAG
+<img width="1403" height="800" alt="image" src="https://github.com/user-attachments/assets/76cbfeb3-b3fb-4b8b-8040-86892796391a" />
 
 ## Метрики и эксперименты
 **Эксперименты по выбору би-енкодера:** experiments/test_models.ipynb
