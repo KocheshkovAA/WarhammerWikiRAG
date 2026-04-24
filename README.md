@@ -46,7 +46,7 @@ RAG-система по Warhammer 40k с гибридной архитектур
 
 ## Сервисы
 Сервисы развернуты в docker контейнерах.
-<img width="323" height="348" alt="RAG-Page-3 drawio" src="https://github.com/user-attachments/assets/1d7607d0-90d8-41e1-995a-d24dc6141dbe" />
+<img width="323" height="310" alt="RAG-Page-3 drawio" src="https://github.com/user-attachments/assets/1d7607d0-90d8-41e1-995a-d24dc6141dbe" />
 
 ## Пайплайн
 <img width="326" height="464" alt="RAG-Page-4 drawio" src="https://github.com/user-attachments/assets/9ca31646-69d7-4e65-aa8e-8ef8b716c4ea" />
